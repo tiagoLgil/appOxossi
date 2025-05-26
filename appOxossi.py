@@ -17,6 +17,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import tempfile
 import datetime
+from collections import Counter
 
 # Configurar matplotlib para modo não-interativo para evitar problemas com threading
 import matplotlib
@@ -57,6 +58,45 @@ except OSError:
             print(f"Erro ao carregar o modelo spaCy: {e}")
             processamento = None
 
+# IMPLEMENTAÇÃO PERSONALIZADA DO PAGERANK (SEM SCIPY)
+def custom_pagerank(G, alpha=0.85, max_iter=100, tol=1.0e-6):
+    """
+    Implementação customizada do PageRank que não depende do SciPy
+    """
+    if len(G) == 0:
+        return {}
+    
+    # Inicializar valores
+    n = len(G)
+    x = {node: 1.0 / n for node in G.nodes()}
+    
+    # Iterar até convergência
+    for _ in range(max_iter):
+        x_last = x.copy()
+        x = {node: 0.0 for node in G.nodes()}
+        
+        for node in G.nodes():
+            rank = (1.0 - alpha) / n
+            
+            # Somar contribuições dos nós que apontam para este
+            for neighbor in G.predecessors(node) if G.is_directed() else G.neighbors(node):
+                if G.is_directed():
+                    out_degree = G.out_degree(neighbor)
+                else:
+                    out_degree = G.degree(neighbor)
+                
+                if out_degree > 0:
+                    rank += alpha * x_last[neighbor] / out_degree
+            
+            x[node] = rank
+        
+        # Verificar convergência
+        err = sum(abs(x[node] - x_last[node]) for node in G.nodes())
+        if err < n * tol:
+            break
+    
+    return x
+
 # Funções de processamento de texto adaptadas do código original
 def limpeza(texto):
     texto = texto.lower()
@@ -81,12 +121,7 @@ def limpezaM(texto):
     return texto
 
 def contarPalavras(lista):
-    resultados = {}
-    for item in lista:
-        contagem = lista.count(item)
-        palavra = item
-        resultados[palavra] = contagem
-    return resultados
+    return Counter(lista)
 
 def nTokens(texto):
     Ntokens = ["antigo sistema colonial","rio de janeiro","são paulo","rio grande de são pedro","Grão-Pará","Rio Grande","Santa Catarina","antigo regime","brasil colonial","américa portuguesa","companhia de jesus","nossa senhora"]
@@ -210,8 +245,16 @@ def gerar_grafico_rede(arestas, limite_nos=100):
     
     G.add_edges_from(arestas_top)
     
-    # Calcular PageRank para determinar importância dos nós
-    pr = nx.pagerank(G, alpha=0.8)
+    # Usar implementação customizada do PageRank
+    try:
+        pr = custom_pagerank(G, alpha=0.8)
+    except Exception as e:
+        print(f"Erro no cálculo do PageRank: {e}")
+        # Fallback: usar grau dos nós como medida de importância
+        pr = {node: G.degree(node) for node in G.nodes()}
+        # Normalizar
+        max_degree = max(pr.values()) if pr.values() else 1
+        pr = {node: degree/max_degree for node, degree in pr.items()}
     
     # Extrair os nós mais importantes
     nos_importantes = sorted(pr, key=pr.get, reverse=True)[:15]
@@ -224,27 +267,34 @@ def salvar_grafico_rede(G, nos_importantes, pr, tamanho_figura=(10, 8)):
     fig = Figure(figsize=tamanho_figura)
     ax = fig.add_subplot(111)
     
-    # Posição dos nós
-    pos = nx.spring_layout(G, k=0.3, iterations=50, seed=42)  # Adicionando seed para consistência
-    
-    # Tamanhos de nós baseados no PageRank
-    node_sizes = [pr[node] * 8000 for node in G.nodes()]
-    
-    # Cores dos nós - mais importantes em vermelho
-    node_colors = ['red' if node in nos_importantes[:6] else 'skyblue' for node in G.nodes()]
-    
-    # Desenhar nós
-    nx.draw_networkx_nodes(G, pos, ax=ax, 
-                          node_size=node_sizes, node_color=node_colors, alpha=0.8)
-    
-    # Desenhar arestas com baixa opacidade
-    nx.draw_networkx_edges(G, pos, ax=ax, 
-                          width=0.5, alpha=0.3)
-    
-    # Adicionar rótulos apenas para os nós mais importantes
-    labels = {node: node for node in nos_importantes[:10]}
-    nx.draw_networkx_labels(G, pos, labels=labels, ax=ax,
-                          font_size=10, font_weight='bold')
+    if len(G.nodes()) == 0:
+        ax.text(0.5, 0.5, 'Nenhum nó encontrado\nno grafo', 
+                horizontalalignment='center', verticalalignment='center',
+                transform=ax.transAxes, fontsize=14)
+        ax.set_axis_off()
+    else:
+        # Posição dos nós
+        pos = nx.spring_layout(G, k=0.3, iterations=50, seed=42)
+        
+        # Tamanhos de nós baseados no PageRank
+        max_pr = max(pr.values()) if pr.values() else 1
+        node_sizes = [pr.get(node, 0) * 8000 / max_pr for node in G.nodes()]
+        
+        # Cores dos nós - mais importantes em vermelho
+        node_colors = ['red' if node in nos_importantes[:6] else 'skyblue' for node in G.nodes()]
+        
+        # Desenhar nós
+        nx.draw_networkx_nodes(G, pos, ax=ax, 
+                              node_size=node_sizes, node_color=node_colors, alpha=0.8)
+        
+        # Desenhar arestas com baixa opacidade
+        nx.draw_networkx_edges(G, pos, ax=ax, 
+                              width=0.5, alpha=0.3)
+        
+        # Adicionar rótulos apenas para os nós mais importantes
+        labels = {node: node for node in nos_importantes[:10]}
+        nx.draw_networkx_labels(G, pos, labels=labels, ax=ax,
+                              font_size=10, font_weight='bold')
     
     # Remover eixos para uma visualização mais limpa
     ax.set_axis_off()
@@ -351,12 +401,16 @@ class MainWindow(QMainWindow):
             # Criar um ícone simples se necessário
             icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_icon.png")
             if not os.path.exists(icon_path):
-                # Criar um ícone básico
-                from PIL import Image, ImageDraw
-                img = Image.new('RGB', (64, 64), color = (73, 109, 137))
-                d = ImageDraw.Draw(img)
-                d.rectangle([(20, 20), (44, 44)], fill=(255, 255, 255))
-                img.save(icon_path)
+                # Criar um ícone básico usando matplotlib (sem PIL)
+                import matplotlib.pyplot as plt
+                fig, ax = plt.subplots(figsize=(1, 1))
+                ax.add_patch(plt.Rectangle((0.2, 0.2), 0.6, 0.6, color='blue', alpha=0.7))
+                ax.set_xlim(0, 1)
+                ax.set_ylim(0, 1)
+                ax.set_aspect('equal')
+                ax.axis('off')
+                plt.savefig(icon_path, dpi=64, format='png')
+                plt.close(fig)
             
             self.setWindowIcon(QIcon(icon_path))
         except:
@@ -765,8 +819,8 @@ class MainWindow(QMainWindow):
         texto_resultado = "Palavras mais importantes na rede:\n\n"
         
         for i, no in enumerate(nos[:10], 1):
-            pagerank = resultado['pagerank'][no]
-            texto_resultado += f"{i}. {no} (PageRank: {pagerank:.4f})\n"
+            pagerank = resultado['pagerank'].get(no, 0)
+            texto_resultado += f"{i}. {no} (Importância: {pagerank:.4f})\n"
         
         # Adicionar estatísticas da rede
         G = resultado['grafo']
@@ -785,7 +839,7 @@ class MainWindow(QMainWindow):
         
         # Adicionar informação sobre a imagem salva
         texto_resultado += f"\nImagem do grafo salva em:\n{self.imagem_atual_path}\n"
-        texto_resultado += "Use o botão 'Abrir Imagem Externamente' para visualizar em tamanho completo."
+        texto_resultado += "Use o botão 'Abrir Imagem' para visualizar em tamanho completo."
         
         self.result_text.setText(texto_resultado)
         
@@ -794,7 +848,7 @@ class MainWindow(QMainWindow):
             self.canvas.carregar_imagem(self.imagem_atual_path)
         except Exception as e:
             self.result_text.append(f"\nErro ao exibir a imagem: {str(e)}\n")
-            self.result_text.append("Use o botão 'Abrir Imagem Externamente' para visualizar.")
+            self.result_text.append("Use o botão 'Abrir Imagem' para visualizar.")
     
     def mostrar_resultado_temas(self, resultado):
         self.progress_bar.setVisible(False)
@@ -879,6 +933,17 @@ if __name__ == "__main__":
         # Desabilitar verificação de ameaças em tempo real para este processo (não funciona sem elevação)
         # Alternativa: adicionar ao caminho de exclusão do Windows Defender
         pass
+    
+    # Verificar se o modelo spaCy está disponível antes de iniciar
+    if not processamento:
+        from PyQt5.QtWidgets import QMessageBox
+        app_temp = QApplication([]) if not QApplication.instance() else QApplication.instance()
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Warning)
+        msg.setWindowTitle("Aviso - Modelo spaCy")
+        msg.setText("O modelo de linguagem spaCy não foi encontrado.")
+        msg.setInformativeText("O aplicativo funcionará com funcionalidade limitada.\n\nPara instalar o modelo, execute:\npython -m spacy download pt_core_news_sm")
+        msg.exec_()
     
     # Iniciar aplicação com tratamento de exceções
     try:
