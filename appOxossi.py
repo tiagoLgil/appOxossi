@@ -427,18 +427,47 @@ class MainWindow(QMainWindow):
         # Adicionar layout de arquivo diretamente, sem GroupBox
         layout.addLayout(file_layout)
         
-        # Usar um splitter horizontal em vez de vertical
+        # Usar um splitter horizontal
         splitter = QSplitter(Qt.Horizontal)
         
-        # Área de exibição do gráfico (lado esquerdo)
-        graph_frame = QFrame()
-        graph_layout = QVBoxLayout(graph_frame)
+        # Área esquerda: controles + gráfico
+        left_frame = QFrame()
+        left_layout = QVBoxLayout(left_frame)
         
-        # Canvas para o gráfico - tamanho menor
-        self.canvas = MatplotlibCanvas(self, width=5, height=5)
+        # Controles de filtro e processamento (acima do gráfico)
+        controls_group = QGroupBox("Controles")
+        controls_layout = QVBoxLayout()
+        
+        # Filtro de palavras
+        filter_layout = QHBoxLayout()
+        self.filtro_checkbox = QCheckBox("Filtrar por palavra:")
+        filter_layout.addWidget(self.filtro_checkbox)
+        
+        self.filtro_input = QLineEdit()
+        self.filtro_input.setEnabled(False)
+        self.filtro_input.setPlaceholderText("Digite a palavra para filtrar...")
+        self.filtro_checkbox.toggled.connect(self.filtro_input.setEnabled)
+        filter_layout.addWidget(self.filtro_input)
+        
+        controls_layout.addLayout(filter_layout)
+        
+        # Botão de processamento
+        processar_button = QPushButton("Processar Texto")
+        processar_button.clicked.connect(self.processar_rede)
+        processar_button.setStyleSheet("QPushButton { font-weight: bold; padding: 8px; }")
+        controls_layout.addWidget(processar_button)
+        
+        controls_group.setLayout(controls_layout)
+        left_layout.addWidget(controls_group)
+        
+        # Canvas para o gráfico (abaixo dos controles)
+        graph_group = QGroupBox("Visualização da Rede")
+        graph_layout = QVBoxLayout()
+        
+        self.canvas = MatplotlibCanvas(self, width=6, height=5)
         graph_layout.addWidget(self.canvas)
         
-        # Botões para a imagem em layout horizontal para economizar espaço
+        # Botões para a imagem em layout horizontal
         image_buttons_layout = QHBoxLayout()
         
         # Botão para abrir a imagem externamente
@@ -452,42 +481,14 @@ class MainWindow(QMainWindow):
         image_buttons_layout.addWidget(export_button)
         
         graph_layout.addLayout(image_buttons_layout)
+        graph_group.setLayout(graph_layout)
+        left_layout.addWidget(graph_group)
         
-        splitter.addWidget(graph_frame)
+        splitter.addWidget(left_frame)
         
-        # Área de controles e resultados (lado direito)
-        control_frame = QFrame()
-        control_layout = QVBoxLayout(control_frame)
-        
-        # Controles em layout horizontal para economizar espaço vertical
-        controls_layout = QHBoxLayout()
-        
-        # Filtro de palavras
-        filter_layout = QVBoxLayout()
-        filter_label = QLabel("Filtrar por palavra:")
-        filter_layout.addWidget(filter_label)
-        
-        filter_inner_layout = QHBoxLayout()
-        self.filtro_checkbox = QCheckBox("Ativar")
-        filter_inner_layout.addWidget(self.filtro_checkbox)
-        
-        self.filtro_input = QLineEdit()
-        self.filtro_input.setEnabled(False)
-        self.filtro_checkbox.toggled.connect(self.filtro_input.setEnabled)
-        filter_inner_layout.addWidget(self.filtro_input)
-        
-        filter_layout.addLayout(filter_inner_layout)
-        controls_layout.addLayout(filter_layout)
-        
-        # Botão de processamento
-        process_layout = QVBoxLayout()
-        process_layout.addItem(QSpacerItem(10, 10))  # Espaçador para alinhar com o filtro
-        processar_button = QPushButton("Processar Texto")
-        processar_button.clicked.connect(self.processar_rede)
-        process_layout.addWidget(processar_button)
-        controls_layout.addLayout(process_layout)
-        
-        control_layout.addLayout(controls_layout)
+        # Área direita: apenas resultados
+        right_frame = QFrame()
+        right_layout = QVBoxLayout(right_frame)
         
         # Resultados
         result_group = QGroupBox("Resultados")
@@ -498,12 +499,12 @@ class MainWindow(QMainWindow):
         result_layout.addWidget(self.result_text)
         
         result_group.setLayout(result_layout)
-        control_layout.addWidget(result_group)
+        right_layout.addWidget(result_group)
         
-        splitter.addWidget(control_frame)
+        splitter.addWidget(right_frame)
         
-        # Definir proporções iniciais do splitter
-        splitter.setSizes([500, 500])
+        # Definir proporções iniciais do splitter (60% esquerda, 40% direita)
+        splitter.setSizes([600, 400])
         
         layout.addWidget(splitter)
         
