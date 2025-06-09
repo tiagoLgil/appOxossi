@@ -18,9 +18,9 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import tempfile
 import datetime
-from collections import Counter
+from collections import Counter, defaultdict
 
-# NOVO: Importações para geração de PDF
+# Importações para geração de PDF
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, PageBreak, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -68,7 +68,7 @@ except OSError:
             print(f"Erro ao carregar o modelo spaCy: {e}")
             processamento = None
 
-# NOVA FUNÇÃO: Análise Temporal (baseada no anospythonSEMséculo.py)
+# FUNÇÃO EXISTENTE: Análise Temporal
 def is_likely_year(text, year, window=50):
     """Verifica se um número é provavelmente um ano baseado no contexto"""
     # Get the context around the year
@@ -187,6 +187,185 @@ def analisar_periodo_temporal(full_content):
             'periodo_encontrado': False,
             'erro': str(e)
         }
+
+# Funções para análise de capitanias (adaptadas de places.py)
+def load_place_captaincy_data(filepath: str):
+    """
+    Carrega dados de locais e suas capitanias a partir de um arquivo CSV/TXT.
+    Formato esperado: "Local;Capitania" por linha.
+    Retorna um dicionário onde a chave é a capitania e o valor é uma lista de locais.
+    """
+    if not os.path.exists(filepath):
+        print(f"Erro: Arquivo de dados de locais/capitanias não encontrado em '{filepath}'")
+        return None
+
+    captaincy_data = defaultdict(list)
+    
+    assigned_places = set() # Para garantir que cada lugar é atribuído apenas uma vez
+
+    try:
+        print(f"Carregando dados de locais/capitanias de: {filepath}")
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line or line.startswith('#'): # Ignorar linhas vazias ou comentadas
+                    continue
+
+                parts = line.split(';', 1) # Usar ';' como delimitador
+
+                if len(parts) == 2:
+                    place = parts[0].strip()
+                    captaincy = parts[1].strip()
+
+                    if place and captaincy:
+                        if place not in assigned_places:
+                            captaincy_data[captaincy].append(place)
+                            assigned_places.add(place)
+                    else:
+                        print(f"Aviso: Linha {line_num} ignorada por falta de nome de local ou capitania: '{line}'")
+                else:
+                    print(f"Aviso: Linha {line_num} ignorada devido ao formato incorreto (Esperado 'Local;Capitania'): '{line}'")
+
+        print(f"Carregados {len(assigned_places)} locais únicos para {len(captaincy_data)} capitanias.")
+
+    except IOError as e:
+        print(f"Erro de I/O ao ler o arquivo {filepath}: {e}")
+        return None
+    except Exception as e:
+        print(f"Erro inesperado ao processar o arquivo {filepath}: {e}")
+        return None
+
+    if not captaincy_data:
+        print(f"Aviso: Nenhum dado válido de local/capitania carregado de '{filepath}'.")
+    return dict(captaincy_data) # Converter para dict regular
+
+
+def search_colonial_places(text: str, captaincy_data: dict):
+    """
+    Busca menções de locais coloniais no texto e estima as capitanias prováveis.
+    Inclui lógica para filtrar referências bibliográficas, especialmente "São Paulo:" e "Rio de Janeiro:".
+    """
+    results = {
+        "found_places_details": [],
+        "top_captaincies": [],
+        "all_captaincy_scores": {}
+    }
+
+    if not text or not captaincy_data:
+        return results
+
+    captaincy_scores = {cap: 0 for cap in captaincy_data}
+    found_places_counts = defaultdict(int)
+    place_to_captaincy_map = {}
+    lower_to_canonical_place = {}
+
+    # Preencher mapas de busca
+    for captaincy, places in captaincy_data.items():
+        for place in places:
+            place_to_captaincy_map[place] = captaincy
+            lower_to_canonical_place[place.lower()] = place
+
+    # Criar padrão regex para todos os lugares, ordenados por tamanho (maiores primeiro)
+    all_places_canonical = list(place_to_captaincy_map.keys())
+    sorted_places = sorted(all_places_canonical, key=len, reverse=True)
+    
+    # Padrão principal para encontrar qualquer lugar
+    place_finder_pattern = re.compile(r'\b(' + '|'.join(re.escape(place) for place in sorted_places) + r')\b', re.IGNORECASE)
+    
+    # Padrões mais específicos para identificar referências bibliográficas de "São Paulo" e "Rio de Janeiro"
+    # Agora incluindo casos sem ano ou com apenas ':'
+    ref_patterns_specific = [
+        # São Paulo ou Rio de Janeiro seguido por ':' e qualquer texto (pode ser o nome de uma editora, etc.)
+        re.compile(r'\b(?:São Paulo|Rio de Janeiro):\s*(?:[a-zA-Z\s,;.]+)', re.IGNORECASE),
+        # São Paulo ou Rio de Janeiro seguido por ',' ou ':' e depois um ano
+        re.compile(r'\b(?:São Paulo|Rio de Janeiro)[\s]*[,:]\s*(?:[a-zA-Z\s]+,)?\s*\d{4}', re.IGNORECASE),
+        # São Paulo ou Rio de Janeiro seguido por '[' e um ano
+        re.compile(r'\b(?:São Paulo|Rio de Janeiro)[\s]*\[\d{4}\]', re.IGNORECASE),
+        # São Paulo ou Rio de Janeiro seguido por parênteses e um ano
+        re.compile(r'\b(?:São Paulo|Rio de Janeiro)\s*\(\d{4}\)', re.IGNORECASE)
+    ]
+
+    try:
+        # Buscar locais no texto
+        for match in place_finder_pattern.finditer(text):
+            matched_text = match.group(0) # O texto completo da correspondência
+            canonical_place = lower_to_canonical_place.get(matched_text.lower())
+            
+            if canonical_place:
+                is_reference = False
+                
+                # Para São Paulo e Rio de Janeiro, aplicar filtros específicos de referência
+                if canonical_place.lower() in ["são paulo", "rio de janeiro"]:
+                    # Pegar um trecho maior para análise de contexto
+                    # O contexto deve incluir o 'matched_text' e o que vem depois
+                    start_context = match.start()
+                    end_context = min(len(text), match.end() + 70) # 70 caracteres depois do match
+                    context = text[start_context:end_context] # Contexto começando no local
+
+                    for ref_pattern in ref_patterns_specific:
+                        # Verificar se o padrão de referência corresponde ao contexto
+                        if ref_pattern.search(context):
+                            is_reference = True
+                            break
+                
+                if not is_reference:
+                    found_places_counts[canonical_place] += 1
+                    captaincy_for_place = place_to_captaincy_map.get(canonical_place)
+                    if captaincy_for_place:
+                        results["found_places_details"].append({
+                            "place": canonical_place,
+                            "captaincy": captaincy_for_place,
+                            "match_text": matched_text,
+                            "start": match.start(),
+                            "end": match.end()
+                        })
+
+    except re.error as e:
+        print(f"Erro de Regex: {e}")
+        return results
+
+    # Calcular pontuações das capitanias (restante da função inalterado)
+    for place, count in found_places_counts.items():
+        captaincy = place_to_captaincy_map.get(place)
+        if captaincy:
+            captaincy_scores[captaincy] += count
+
+    sorted_captaincies = sorted(captaincy_scores.items(), key=lambda item: item[1], reverse=True)
+    
+    positive_captaincies = [(cap, score) for cap, score in sorted_captaincies if score > 0]
+
+    top_captaincies_list = []
+    if positive_captaincies:
+        max_score = positive_captaincies[0][1]
+        for cap, score in positive_captaincies:
+            if score > 0:
+                if len(top_captaincies_list) < 3 or score == max_score:
+                    top_captaincies_list.append((cap, score))
+                    if score > max_score:
+                        max_score = score
+                elif score < top_captaincies_list[-1][1]:
+                    break
+
+        if len(top_captaincies_list) > 3:
+            unique_top_captaincies = []
+            current_score_count = {}
+            for cap, score in top_captaincies_list:
+                if len(unique_top_captaincies) < 3:
+                    unique_top_captaincies.append((cap, score))
+                    current_score_count[score] = current_score_count.get(score, 0) + 1
+                elif score == unique_top_captaincies[-1][1]:
+                    unique_top_captaincies.append((cap, score))
+                    current_score_count[score] = current_score_count.get(score, 0) + 1
+                else:
+                    break
+            top_captaincies_list = unique_top_captaincies
+
+
+    results["top_captaincies"] = top_captaincies_list
+    results["all_captaincy_scores"] = dict(captaincy_scores)
+
+    return results
+
 
 # IMPLEMENTAÇÃO PERSONALIZADA DO PAGERANK (SEM SCIPY)
 def custom_pagerank(G, alpha=0.85, max_iter=100, tol=1.0e-6):
@@ -466,10 +645,11 @@ def salvar_grafico_rede(G, nos_importantes, pr, tamanho_figura=(10, 8)):
 
     return filename
 
-# NOVA FUNÇÃO: Gerar relatório PDF com análise temporal
-def gerar_relatorio_pdf(resultado, arquivo_origem, palavra_filtro=None, caminho_saida=None):
+# Função para gerar relatório PDF com análise temporal e de capitanias
+def gerar_relatorio_pdf(resultado, arquivo_origem, palavra_filtro=None, caminho_saida=None, first_page_text=None):
     """
-    Gera um relatório PDF completo com gráfico, resultados e análise temporal
+    Gera um relatório PDF completo com gráfico, resultados, análise temporal e de capitanias.
+    Adicionado 'first_page_text' para incluir no relatório.
     """
     if not caminho_saida:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -541,9 +721,16 @@ def gerar_relatorio_pdf(resultado, arquivo_origem, palavra_filtro=None, caminho_
     elementos.append(Paragraph(info_geral, estilo_normal))
     elementos.append(Spacer(1, 20))
 
+    # NOVA SEÇÃO: Texto da Primeira Página
+    if first_page_text:
+        elementos.append(Paragraph("1. Texto Inicial do Documento (Primeiras 50 palavras)", estilo_subtitulo))
+        elementos.append(Paragraph(f'"{first_page_text}..."', estilo_normal))
+        elementos.append(Spacer(1, 15))
+
+
     # NOVA SEÇÃO: ANÁLISE TEMPORAL
     if 'analise_temporal' in resultado and resultado['analise_temporal']['periodo_encontrado']:
-        elementos.append(Paragraph("1. Análise do Período Temporal", estilo_subtitulo))
+        elementos.append(Paragraph("2. Análise do Período Temporal", estilo_subtitulo))
 
         temporal = resultado['analise_temporal']
 
@@ -576,15 +763,57 @@ def gerar_relatorio_pdf(resultado, arquivo_origem, palavra_filtro=None, caminho_
 
         elementos.append(tabela_temporal)
         elementos.append(Spacer(1, 15))
+    
+    # NOVA SEÇÃO: Análise de Capitanias
+    if 'analise_capitanias' in resultado and resultado['analise_capitanias']['top_captaincies']:
+        elementos.append(Paragraph("3. Análise de Capitanias Mencionadas", estilo_subtitulo))
 
-        # Adicionar séculos mencionados se houver
-        if temporal.get('seculos_mencionados'):
-            seculos_texto = f"<b>Séculos mencionados:</b> {', '.join(temporal['seculos_mencionados'])}"
-            elementos.append(Paragraph(seculos_texto, estilo_normal))
+        capitanias = resultado['analise_capitanias']
+        
+        elementos.append(Paragraph("<b>Capitanias mais prováveis:</b>", estilo_normal))
+        for cap, score in capitanias['top_captaincies']:
+            elementos.append(Paragraph(f"• {cap} (Pontuação: {score})", estilo_lista))
+        elementos.append(Spacer(1, 10))
+
+        if capitanias['found_places_details']:
+            elementos.append(Paragraph("<b>Detalhes dos locais encontrados e suas capitanias:</b>", estilo_normal))
+            dados_locais = [['Local', 'Capitania', 'Ocorrências']]
+            # Limitar a 10 locais mais frequentes para o PDF
+            sorted_places_for_report = sorted(capitanias['found_places_details'], key=lambda x: x['place'], reverse=False)
+            
+            # Agrupar e somar ocorrências por local, já que found_places_details pode ter duplicatas do mesmo local
+            place_counts = defaultdict(int)
+            place_captaincy_map = {}
+            for detail in sorted_places_for_report:
+                place_counts[detail['place']] += 1
+                place_captaincy_map[detail['place']] = detail['captaincy']
+
+            sorted_place_counts = sorted(place_counts.items(), key=lambda item: item[1], reverse=True)[:10] # Top 10
+
+            for place, count in sorted_place_counts:
+                captaincy = place_captaincy_map[place]
+                dados_locais.append([place, captaincy, str(count)])
+
+            tabela_locais = Table(dados_locais)
+            tabela_locais.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#DC7633')), # Laranja
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#F5D7B2')), # Laranja claro
+                ('GRID', (0, 0), (-1, -1), 1, colors.black)
+            ]))
+            elementos.append(tabela_locais)
             elementos.append(Spacer(1, 15))
+        else:
+            elementos.append(Paragraph("Nenhum local colonial conhecido encontrado no texto para estimar capitanias.", estilo_normal))
+        elementos.append(Spacer(1, 20))
 
-    # SEÇÃO 2: ESTATÍSTICAS DA REDE
-    elementos.append(Paragraph("2. Estatísticas da Rede de Palavras", estilo_subtitulo))
+
+    # SEÇÃO 4: ESTATÍSTICAS DA REDE
+    elementos.append(Paragraph("4. Estatísticas da Rede de Palavras", estilo_subtitulo))
 
     G = resultado['grafo']
     estatisticas = f"""
@@ -596,8 +825,8 @@ def gerar_relatorio_pdf(resultado, arquivo_origem, palavra_filtro=None, caminho_
     elementos.append(Paragraph(estatisticas, estilo_normal))
     elementos.append(Spacer(1, 15))
 
-    # SEÇÃO 3: PALAVRAS MAIS IMPORTANTES
-    elementos.append(Paragraph("3. Palavras Mais Importantes", estilo_subtitulo))
+    # SEÇÃO 5: PALAVRAS MAIS IMPORTANTES
+    elementos.append(Paragraph("5. Palavras Mais Importantes", estilo_subtitulo))
 
     nos_importantes = resultado['nos_importantes'][:15]
     pagerank = resultado['pagerank']
@@ -624,9 +853,9 @@ def gerar_relatorio_pdf(resultado, arquivo_origem, palavra_filtro=None, caminho_
     elementos.append(tabela)
     elementos.append(Spacer(1, 20))
 
-    # SEÇÃO 4: ANÁLISE DE MACRO-TEMAS (se disponível)
+    # SEÇÃO 6: ANÁLISE DE MACRO-TEMAS (se disponível)
     if resultado.get('tema_resultados'):
-        elementos.append(Paragraph("4. Análise de Macro-temas", estilo_subtitulo))
+        elementos.append(Paragraph("6. Análise de Macro-temas", estilo_subtitulo))
 
         tema_resultados = resultado['tema_resultados']
         total_ocorrencias = sum(tema_resultados.values())
@@ -662,8 +891,8 @@ def gerar_relatorio_pdf(resultado, arquivo_origem, palavra_filtro=None, caminho_
     # QUEBRA DE PÁGINA ANTES DO GRÁFICO
     elementos.append(PageBreak())
 
-    # SEÇÃO 5: VISUALIZAÇÃO DA REDE
-    elementos.append(Paragraph("5. Visualização da Rede de Palavras", estilo_subtitulo))
+    # SEÇÃO 7: VISUALIZAÇÃO DA REDE
+    elementos.append(Paragraph("7. Visualização da Rede de Palavras", estilo_subtitulo))
     elementos.append(Spacer(1, 15))
 
     # Adicionar imagem do gráfico
@@ -682,16 +911,19 @@ def gerar_relatorio_pdf(resultado, arquivo_origem, palavra_filtro=None, caminho_
 
     elementos.append(Spacer(1, 20))
 
-    # SEÇÃO 6: INTERPRETAÇÃO DOS RESULTADOS
-    elementos.append(Paragraph("6. Interpretação dos Resultados", estilo_subtitulo))
+    # SEÇÃO 8: INTERPRETAÇÃO DOS RESULTADOS
+    elementos.append(Paragraph("8. Interpretação dos Resultados", estilo_subtitulo))
     interpretacao = """
     Este relatório apresenta uma análise automatizada de texto histórico usando técnicas de processamento
     de linguagem natural e análise de redes. As palavras mais importantes foram identificadas através do
     algoritmo PageRank, que considera tanto a frequência quanto as conexões entre termos.
     <br/><br/>
     A análise temporal identifica o período histórico sobre o qual o texto fala, usando estatísticas
-    baseadas nos anos mencionados no documento. O desvio médio absoluto é usado para determinar o
+    basadas nos anos mencionados no documento. O desvio médio absoluto é usado para determinar o
     período principal de foco do texto.
+    <br/><br/>
+    A análise de capitanias tenta identificar as áreas geográficas de maior relevância no texto,
+    baseando-se nas menções a locais e suas respectivas capitanias históricas.
     <br/><br/>
     A rede de palavras mostra as relações semânticas entre os conceitos principais do texto, permitindo
     identificar temas centrais e sua interconexão. Os nós maiores e de cor mais intensa representam os termos mais
@@ -706,42 +938,49 @@ def gerar_relatorio_pdf(resultado, arquivo_origem, palavra_filtro=None, caminho_
     except Exception as e:
         raise Exception(f"Erro ao gerar PDF: {str(e)}")
 
-# Classe para processamento em thread separada (ATUALIZADA com análise temporal e stopwords)
+
+# Classe para processamento em thread separada (ATUALIZADA com análise temporal e stopwords e capitanias)
 class ProcessadorThread(QThread):
     progresso_sinal = pyqtSignal(int)
     resultado_sinal = pyqtSignal(object)
     erro_sinal = pyqtSignal(str)
 
-    def __init__(self, texto, palavra_filtro=None, macro_temas=None, stopwords=None):
+    def __init__(self, texto, palavra_filtro=None, macro_temas=None, stopwords=None, captaincy_data=None, first_page_text=None):
         super().__init__()
         self.texto = texto
         self.palavra_filtro = palavra_filtro
         self.macro_temas = macro_temas
-        self.stopwords = stopwords # NOVO PARÂMETRO
+        self.stopwords = stopwords
+        self.captaincy_data = captaincy_data # NOVO PARÂMETRO
+        self.first_page_text = first_page_text # NOVO PARÂMETRO para texto da primeira página
 
     def run(self):
         try:
             self.progresso_sinal.emit(10)
 
-            # NOVA: Análise temporal
+            # Análise temporal
             analise_temporal = analisar_periodo_temporal(self.texto)
-            self.progresso_sinal.emit(30)
+            self.progresso_sinal.emit(20) # Aumentar passos para capitanias
+
+            # NOVO: Análise de capitanias
+            analise_capitanias = search_colonial_places(self.texto, self.captaincy_data)
+            self.progresso_sinal.emit(40)
 
             # Passar stopwords para a função de rede
             arestas, tema_resultados = listaParaRedeSubstantivos(
                 self.texto,
                 self.palavra_filtro,
                 self.macro_temas,
-                self.stopwords # NOVO PARÂMETRO
+                self.stopwords
             )
-            self.progresso_sinal.emit(60)
+            self.progresso_sinal.emit(70)
 
             G, nos_importantes, pagerank = gerar_grafico_rede(arestas)
-            self.progresso_sinal.emit(80)
+            self.progresso_sinal.emit(85)
 
             # Gerar e salvar a imagem do grafo
             imagem_path = salvar_grafico_rede(G, nos_importantes, pagerank)
-            self.progresso_sinal.emit(90)
+            self.progresso_sinal.emit(95)
 
             resultado = {
                 'arestas': arestas,
@@ -750,7 +989,9 @@ class ProcessadorThread(QThread):
                 'pagerank': pagerank,
                 'tema_resultados': tema_resultados,
                 'imagem_path': imagem_path,
-                'analise_temporal': analise_temporal
+                'analise_temporal': analise_temporal,
+                'analise_capitanias': analise_capitanias, # Adicionar resultado da análise de capitanias
+                'first_page_text': self.first_page_text # Adicionar o texto da primeira página
             }
 
             self.progresso_sinal.emit(100)
@@ -936,6 +1177,7 @@ class MainWindow(QMainWindow):
 
         # Variáveis para armazenar dados
         self.texto_atual = ""
+        self.first_page_text = "" # NOVO: para armazenar o texto da primeira página
         self.resultado_atual = None
         self.imagem_atual_path = None
         self.arquivo_origem = None  # para guardar o caminho do arquivo original
@@ -963,6 +1205,20 @@ class MainWindow(QMainWindow):
             "toda", "todos", "todas", "outro", "outra", "outros", "outras"
         ]
 
+        # Variável para armazenar os dados de capitanias
+        self.captaincy_place_data = None
+        # Definir o caminho para o arquivo places.txt
+        # Assumindo que places.txt está no mesmo diretório do script principal
+        self.places_data_filepath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "places.txt")
+
+        # Carregar os dados de capitanias ao iniciar
+        self.captaincy_place_data = load_place_captaincy_data(self.places_data_filepath)
+        if self.captaincy_place_data is None:
+            QMessageBox.critical(self, "Erro de Carregamento",
+                                 f"Não foi possível carregar os dados de locais/capitanias de '{self.places_data_filepath}'.\n"
+                                 "A análise de capitanias não estará disponível.")
+            self.captaincy_place_data = {} # Inicializar vazio para evitar erros
+
         # Criar a interface
         self.setup_ui()
 
@@ -975,11 +1231,13 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tab_rede = QWidget()
         self.tab_temas = QWidget()
-        self.tab_stopwords = QWidget() # NOVA ABA
+        self.tab_stopwords = QWidget()
+        self.tab_places = QWidget() # NOVA ABA PARA LOCAIS
 
-        self.tabs.addTab(self.tab_rede, "Análise de Rede e Temporal") # Título da tab ajustado
+        self.tabs.addTab(self.tab_rede, "Análise de Rede, Temporal e Capitanias") # Título da tab ajustado
         self.tabs.addTab(self.tab_temas, "Análise de Macro-temas")
-        self.tabs.addTab(self.tab_stopwords, "Configurar Stopwords") # NOVA ABA
+        self.tabs.addTab(self.tab_stopwords, "Configurar Stopwords")
+        self.tabs.addTab(self.tab_places, "Configurar Locais e Capitanias") # Adiciona a nova aba
 
         # Configurar tab de rede de palavras
         self.setup_tab_rede()
@@ -989,6 +1247,9 @@ class MainWindow(QMainWindow):
 
         # Configurar tab de stopwords
         self.setup_tab_stopwords()
+
+        # Configurar tab de locais e capitanias
+        self.setup_tab_places()
 
         # Adicionar tabs ao layout principal
         main_layout.addWidget(self.tabs)
@@ -1052,7 +1313,7 @@ class MainWindow(QMainWindow):
         controls_layout.addLayout(filter_layout)
 
         # Botão de processamento
-        processar_button = QPushButton("Iniciar Análise de Rede e Temporal")
+        processar_button = QPushButton("Iniciar Análise de Rede, Temporal e Capitanias")
         processar_button.clicked.connect(self.processar_rede)
         processar_button.setStyleSheet("QPushButton { font-weight: bold; padding: 10px; background-color: #3F51B5; color: white; border-radius: 8px; font-size: 11pt; } QPushButton:hover { background-color: #5C6BC0; }")
         controls_layout.addWidget(processar_button)
@@ -1092,11 +1353,23 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(left_frame)
 
-        # Área direita: apenas resultados
+        # Área direita: resultados e texto da primeira página
         right_frame = QFrame()
         right_frame.setFrameShape(QFrame.StyledPanel)
         right_frame.setFrameShadow(QFrame.Raised)
         right_layout = QVBoxLayout(right_frame)
+
+        # NOVO: Campo para o texto da primeira página
+        first_page_group = QGroupBox("Texto Inicial do Documento (Primeiras 50 palavras)")
+        first_page_layout = QVBoxLayout()
+        self.first_page_text_display = QPlainTextEdit()
+        self.first_page_text_display.setReadOnly(True)
+        self.first_page_text_display.setFont(QFont("Consolas", 9))
+        self.first_page_text_display.setStyleSheet("background-color: #F8F8F8; color: #333333; border: 1px solid #E0E0E0; border-radius: 5px;")
+        # Removido setMaximumHeight(50)
+        first_page_layout.addWidget(self.first_page_text_display)
+        first_page_group.setLayout(first_page_layout)
+        right_layout.addWidget(first_page_group, 15) # Ajuste de stretch para 15%
 
         # Resultados
         result_group = QGroupBox("Resultados Detalhados da Análise")
@@ -1109,7 +1382,7 @@ class MainWindow(QMainWindow):
         result_layout.addWidget(self.result_text)
 
         result_group.setLayout(result_layout)
-        right_layout.addWidget(result_group)
+        right_layout.addWidget(result_group, 85) # Ajuste de stretch para 85%
 
         splitter.addWidget(right_frame)
 
@@ -1183,6 +1456,18 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(buttons_layout)
 
+        # NOVO: Campo para o texto da primeira página na aba de temas
+        first_page_group_temas = QGroupBox("Texto Inicial do Documento (Primeiras 50 palavras)")
+        first_page_layout_temas = QVBoxLayout()
+        self.first_page_text_display_temas = QPlainTextEdit()
+        self.first_page_text_display_temas.setReadOnly(True)
+        self.first_page_text_display_temas.setFont(QFont("Consolas", 9))
+        self.first_page_text_display_temas.setStyleSheet("background-color: #F8F8F8; color: #333333; border: 1px solid #E0E0E0; border-radius: 5px;")
+        # Removido setMaximumHeight(50)
+        first_page_layout_temas.addWidget(self.first_page_text_display_temas)
+        first_page_group_temas.setLayout(first_page_layout_temas)
+        layout.addWidget(first_page_group_temas, 15) # Ajuste de stretch para 15%
+
         # Área de resultados
         results_group = QGroupBox("Resultados Detalhados da Análise")
         results_layout = QVBoxLayout()
@@ -1194,7 +1479,7 @@ class MainWindow(QMainWindow):
         results_layout.addWidget(self.results_temas)
 
         results_group.setLayout(results_layout)
-        layout.addWidget(results_group)
+        layout.addWidget(results_group, 85) # Ajuste de stretch para 85%
 
         # Adicionar um 'stretch' para que o conteúdo fique no topo
         layout.addStretch(1)
@@ -1265,6 +1550,190 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
         self.carregar_stopwords_na_interface()
 
         self.tab_stopwords.setLayout(layout)
+
+    def setup_tab_places(self):
+        layout = QVBoxLayout()
+
+        places_group = QGroupBox("Editar Locais e Capitanias")
+        places_layout = QVBoxLayout(places_group)
+
+        description_label = QLabel("""
+            Edite a lista de locais e suas capitanias. Cada linha deve seguir o formato:<br/>
+            <code><b>Nome do Local;Nome da Capitania</b></code><br/>
+            (Exemplo: <code>Olinda;Pernambuco</code>)<br/>
+            As mudanças serão usadas na análise de capitanias.
+        """)
+        description_label.setWordWrap(True)
+        description_label.setStyleSheet("QLabel { color: #555555; margin-bottom: 10px; }")
+        places_layout.addWidget(description_label)
+
+        self.places_text_edit = QPlainTextEdit() # Usar QPlainTextEdit para melhor performance com muitas linhas
+        self.places_text_edit.setFont(QFont("Consolas", 10))
+        self.places_text_edit.setStyleSheet("background-color: #FAFAFA; border: 1px solid #CFD8DC; border-radius: 4px;")
+        places_layout.addWidget(self.places_text_edit)
+
+        buttons_layout = QHBoxLayout()
+
+        load_button = QPushButton("Carregar do Arquivo...")
+        load_button.clicked.connect(self.load_places_from_file_ui)
+        buttons_layout.addWidget(load_button)
+
+        save_button = QPushButton("Salvar no Arquivo...")
+        save_button.clicked.connect(self.save_places_to_file_ui)
+        buttons_layout.addWidget(save_button)
+
+        add_entry_button = QPushButton("Adicionar Nova Entrada")
+        add_entry_button.clicked.connect(self.add_place_entry_ui)
+        buttons_layout.addWidget(add_entry_button)
+
+        clear_button = QPushButton("Limpar Tudo")
+        clear_button.clicked.connect(self.clear_places_data_ui)
+        buttons_layout.addWidget(clear_button)
+
+        places_layout.addLayout(buttons_layout)
+        layout.addWidget(places_group)
+
+        # Carregar dados iniciais ao abrir a aba
+        self.load_places_data_into_editor()
+
+        layout.addStretch(1)
+        self.tab_places.setLayout(layout)
+
+    def load_places_data_into_editor(self):
+        """Popula o QTextEdit com os dados de capitanias atuais."""
+        if self.captaincy_place_data:
+            lines = []
+            for cap, places_list in self.captaincy_place_data.items():
+                for place in places_list:
+                    lines.append(f"{place};{cap}")
+            self.places_text_edit.setPlainText("\n".join(sorted(lines))) # Ordenar para melhor visualização
+        else:
+            self.places_text_edit.setPlainText("")
+
+    def parse_editor_to_places_data(self):
+        """
+        Analisa o texto do editor e atualiza self.captaincy_place_data.
+        Retorna True se bem-sucedido, False e uma mensagem de erro caso contrário.
+        """
+        new_captaincy_data = defaultdict(list)
+        assigned_places = set()
+        errors = []
+
+        text_content = self.places_text_edit.toPlainText()
+        for line_num, line in enumerate(text_content.split('\n'), 1):
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+
+            parts = line.split(';', 1)
+            if len(parts) == 2:
+                place = parts[0].strip()
+                captaincy = parts[1].strip()
+                if place and captaincy:
+                    if place not in assigned_places:
+                        new_captaincy_data[captaincy].append(place)
+                        assigned_places.add(place)
+                    else:
+                        errors.append(f"Linha {line_num}: Local '{place}' duplicado. A primeira ocorrência será mantida.")
+                else:
+                    errors.append(f"Linha {line_num}: Formato inválido - Local ou Capitania ausente em '{line}'.")
+            else:
+                errors.append(f"Linha {line_num}: Formato inválido - Esperado 'Local;Capitania' em '{line}'.")
+        
+        if errors:
+            error_message = "Erros encontrados ao carregar dados de locais:\n\n" + "\n".join(errors)
+            QMessageBox.warning(self, "Aviso de Formato", error_message)
+            # Decide if you want to proceed with partial data or revert
+            # For now, we'll update with potentially partial data
+            self.captaincy_place_data = dict(new_captaincy_data)
+            return False, error_message
+        else:
+            self.captaincy_place_data = dict(new_captaincy_data)
+            return True, "Dados de locais atualizados com sucesso."
+
+    def load_places_from_file_ui(self):
+        """Carrega dados de locais de um arquivo selecionado pelo usuário."""
+        options = QFileDialog.Options()
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Carregar Locais e Capitanias", "", "Arquivos de Texto (*.txt *.csv);;Todos os Arquivos (*)", options=options
+        )
+        if file_path:
+            loaded_data = load_place_captaincy_data(file_path)
+            if loaded_data is not None:
+                self.captaincy_place_data = loaded_data
+                self.load_places_data_into_editor()
+                QMessageBox.information(self, "Sucesso", f"Dados de locais carregados de '{os.path.basename(file_path)}'.")
+            else:
+                QMessageBox.critical(self, "Erro", f"Falha ao carregar dados do arquivo '{os.path.basename(file_path)}'. Verifique o formato.")
+
+    def save_places_to_file_ui(self):
+        """Salva os dados de locais editados para um arquivo."""
+        success, message = self.parse_editor_to_places_data() # Primeiro, parseia e valida o que está no editor
+        if not success:
+            return # Não salva se houver erros de formatação graves
+
+        options = QFileDialog.Options()
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Salvar Locais e Capitanias", os.path.expanduser("~/places.txt"),
+            "Arquivos de Texto (*.txt);;Todos os Arquivos (*)", options=options
+        )
+        if file_path:
+            if not file_path.lower().endswith(('.txt', '.csv')):
+                file_path += '.txt' # Adiciona .txt por padrão
+
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    for cap, places_list in self.captaincy_place_data.items():
+                        for place in places_list:
+                            f.write(f"{place};{cap}\n")
+                QMessageBox.information(self, "Sucesso", f"Dados de locais salvos com sucesso em:\n{file_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Erro", f"Erro ao salvar o arquivo: {str(e)}")
+
+    def add_place_entry_ui(self):
+        """Adiciona uma nova entrada de local e capitania via diálogo."""
+        place, ok_place = QInputDialog.getText(self, "Adicionar Local", "Nome do Local:")
+        if not ok_place or not place.strip():
+            return
+
+        captaincy, ok_cap = QInputDialog.getText(self, "Adicionar Capitania", "Nome da Capitania:")
+        if not ok_cap or not captaincy.strip():
+            return
+        
+        # Parse current editor content first to avoid losing unsaved changes
+        self.parse_editor_to_places_data() # This will update self.captaincy_place_data
+
+        canonical_place = place.strip()
+        canonical_captaincy = captaincy.strip()
+
+        # Check for duplication (optional, but good for data quality)
+        is_duplicate = False
+        for existing_places in self.captaincy_place_data.values():
+            if canonical_place in existing_places:
+                is_duplicate = True
+                break
+        
+        if is_duplicate:
+            QMessageBox.warning(self, "Aviso", f"O local '{canonical_place}' já existe na lista.")
+            return
+
+        # Add to the internal dictionary
+        self.captaincy_place_data[canonical_captaincy].append(canonical_place)
+        
+        # Refresh the editor display
+        self.load_places_data_into_editor()
+        QMessageBox.information(self, "Sucesso", f"Local '{canonical_place}' adicionado à capitania '{canonical_captaincy}'.")
+
+    def clear_places_data_ui(self):
+        """Limpa todos os dados de locais e capitanias na interface e na memória."""
+        reply = QMessageBox.question(self, 'Confirmar Limpeza',
+                                     "Tem certeza que deseja limpar todos os dados de locais e capitanias?\nIsso não poderá ser desfeito facilmente.",
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.captaincy_place_data = defaultdict(list) # Resetar o dicionário
+            self.places_text_edit.setPlainText("") # Limpar a interface
+            QMessageBox.information(self, "Sucesso", "Todos os dados de locais e capitanias foram limpos.")
+
 
     def carregar_temas_na_interface(self):
         # Limpar os editores de tema existentes
@@ -1466,18 +1935,30 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
 
     def carregar_arquivo(self, file_path):
         try:
+            full_text = ""
+            first_page_content = ""
+
             if file_path.lower().endswith('.pdf'):
-                texto = self.extrair_texto_pdf(file_path)
+                # Extrair texto da primeira página e o texto completo
+                first_page_content, full_text = self.extrair_texto_pdf(file_path)
             else:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
-                    texto = file.read()
+                    full_text = file.read()
+                    # Para arquivos de texto, as primeiras 50 palavras são o "texto da primeira página"
+                    first_page_content = " ".join(full_text.split()[:50])
 
-            self.texto_atual = texto
+            self.texto_atual = full_text
+            self.first_page_text = first_page_content
+
+            # Atualizar os campos de exibição do texto da primeira página
+            self.first_page_text_display.setPlainText(self.first_page_text)
+            self.first_page_text_display_temas.setPlainText(self.first_page_text)
+
 
             # Mostrar estatísticas básicas em ambas as abas
             info = f"Arquivo carregado com sucesso:\n  • Nome: {os.path.basename(file_path)}\n"
-            info += f"  • Tamanho: {len(texto):,} caracteres\n"
-            info += f"  • Palavras (aprox.): {len(texto.split()):,}\n\n"
+            info += f"  • Tamanho: {len(full_text):,} caracteres\n"
+            info += f"  • Palavras (aprox.): {len(full_text.split()):,}\n\n"
             info += "Pronto para iniciar a análise!\n\n"
             info += "Clique no botão 'Iniciar Análise...' na aba atual para gerar os resultados."
 
@@ -1489,20 +1970,29 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
             QMessageBox.critical(self, "Erro", f"Erro ao carregar o arquivo: {str(e)}")
 
     def extrair_texto_pdf(self, pdf_path):
-        texto = ""
+        full_text = ""
+        first_page_text_extracted = ""
         try:
             with open(pdf_path, 'rb') as file:
                 reader = PyPDF2.PdfReader(file)
+                if reader.pages:
+                    # Extrair texto da primeira página (primeiras 50 palavras)
+                    first_page = reader.pages[0]
+                    text_on_first_page = first_page.extract_text()
+                    if text_on_first_page:
+                        words = text_on_first_page.split()
+                        first_page_text_extracted = " ".join(words[:50])
+
                 for page in reader.pages:
                     text_on_page = page.extract_text()
                     if text_on_page: # Adicionar apenas se houver texto
-                        texto += text_on_page + "\n"
-            if not texto.strip(): # Verificar se o texto extraído está vazio ou apenas espaços em branco
+                        full_text += text_on_page + "\n"
+            if not full_text.strip(): # Verificar se o texto extraído está vazio ou apenas espaços em branco
                  raise ValueError("Nenhum texto extraído do PDF. O PDF pode ser uma imagem escaneada ou estar criptografado.")
-            return texto
+            return first_page_text_extracted, full_text
         except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Erro ao processar PDF: {str(e)}")
-            return ""
+            QMessageBox.critical(self, self.tr("Erro ao processar PDF"), self.tr(f"Erro ao processar PDF: {str(e)}"))
+            return "", "" # Retorna strings vazias em caso de erro
 
     def atualizar_macro_temas(self):
         # Atualizar o dicionário de macro-temas com base nos inputs
@@ -1518,6 +2008,9 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
             QMessageBox.warning(self, "Aviso", "Nenhum texto carregado para processar. Por favor, selecione um arquivo.")
             return
 
+        # Antes de processar, garanta que os dados do editor de locais estão na memória
+        self.parse_editor_to_places_data()
+
         # Verificar se o filtro está ativado
         palavra_filtro = None
         if self.filtro_checkbox.isChecked():
@@ -1532,11 +2025,11 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
         # Mostrar barra de progresso
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
-        self.result_text.setText("Iniciando análise de rede e temporal... Isso pode levar alguns segundos.")
+        self.result_text.setText("Iniciando análise de rede, temporal e capitanias... Isso pode levar alguns segundos.")
         self.canvas.limpar() # Limpar gráfico anterior
 
-        # Iniciar processamento em thread separada (COM STOPWORDS)
-        self.thread = ProcessadorThread(self.texto_atual, palavra_filtro, self.macro_temas, self.stopwords)
+        # Iniciar processamento em thread separada (COM STOPWORDS E CAPITANIAS E TEXTO DA PRIMEIRA PÁGINA)
+        self.thread = ProcessadorThread(self.texto_atual, palavra_filtro, self.macro_temas, self.stopwords, self.captaincy_place_data, self.first_page_text)
         self.thread.progresso_sinal.connect(self.atualizar_progresso)
         self.thread.resultado_sinal.connect(self.mostrar_resultado_rede)
         self.thread.erro_sinal.connect(self.mostrar_erro)
@@ -1546,6 +2039,9 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
         if not self.texto_atual:
             QMessageBox.warning(self, "Aviso", "Nenhum texto carregado para processar. Por favor, selecione um arquivo.")
             return
+        
+        # Antes de processar, garanta que os dados do editor de locais estão na memória
+        self.parse_editor_to_places_data()
 
         # Atualizar macro-temas
         self.atualizar_macro_temas()
@@ -1555,8 +2051,8 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
         self.progress_bar.setVisible(True)
         self.results_temas.setText("Iniciando análise de macro-temas e temporal... Isso pode levar alguns segundos.")
 
-        # Iniciar processamento em thread separada (COM STOPWORDS)
-        self.thread = ProcessadorThread(self.texto_atual, None, self.macro_temas, self.stopwords)
+        # Iniciar processamento em thread separada (COM STOPWORDS E CAPITANIAS E TEXTO DA PRIMEIRA PÁGINA)
+        self.thread = ProcessadorThread(self.texto_atual, None, self.macro_temas, self.stopwords, self.captaincy_place_data, self.first_page_text)
         self.thread.progresso_sinal.connect(self.atualizar_progresso)
         self.thread.resultado_sinal.connect(self.mostrar_resultado_temas)
         self.thread.erro_sinal.connect(self.mostrar_erro)
@@ -1644,12 +2140,13 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
                 self.progress_bar.setVisible(True)
                 self.progress_bar.setValue(50)
 
-                # Gerar o PDF
+                # Gerar o PDF (PASSANDO first_page_text)
                 caminho_pdf = gerar_relatorio_pdf(
                     self.resultado_atual,
                     self.arquivo_origem,
                     palavra_filtro,
-                    file_path
+                    file_path,
+                    self.first_page_text # Passando o texto da primeira página
                 )
 
                 self.progress_bar.setValue(100)
@@ -1681,7 +2178,7 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
                 self.progress_bar.setVisible(False)
                 QMessageBox.critical(self, "Erro", f"Erro ao gerar PDF:\n{str(e)}")
 
-    # FUNÇÃO ATUALIZADA: Mostrar resultado da rede com análise temporal
+    # FUNÇÃO ATUALIZADA: Mostrar resultado da rede com análise temporal e capitanias
     def mostrar_resultado_rede(self, resultado):
         self.resultado_atual = resultado
         self.progress_bar.setVisible(False)
@@ -1699,27 +2196,16 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
             texto_resultado += "║                    ANÁLISE DO PERÍODO TEMPORAL                ║\n"
             texto_resultado += "╚═══════════════════════════════════════════════════════════════╝\n\n"
 
-            texto_resultado += f"📅 Anos encontrados: {temporal['total_anos']}\n"
-            texto_resultado += f"📊 Média dos anos: {temporal['media_anos']}\n"
-            texto_resultado += f"📈 Desvio padrão: {temporal['desvio_padrao']}\n"
-            texto_resultado += f"📏 Desvio médio absoluto (DMA): {temporal['desvio_medio_absoluto']}\n\n"
+            texto_resultado += f"- Anos encontrados: {temporal['total_anos']}\n"
+            texto_resultado += f"- Média dos anos: {temporal['media_anos']}\n"
+            texto_resultado += f"- Desvio padrão: {temporal['desvio_padrao']}\n"
+            texto_resultado += f"- Desvio médio absoluto (DMA): {temporal['desvio_medio_absoluto']}\n\n"
 
             if temporal['periodo_principal']:
-                texto_resultado += f"🎯 PERÍODO PRINCIPAL: {temporal['periodo_principal'][0]} - {temporal['periodo_principal'][1]}\n"
+                texto_resultado += f"🎯 PERÍODO PRINCIPAL: {temporal['periodo_principal'][0]} - {temporal['periodo_principal'][1]}<<<<<<<<<<<<<<<<<<<<<<\n"
 
             if temporal['periodo_alargado']:
-                texto_resultado += f"📅 Período total: {temporal['periodo_alargado'][0]} - {temporal['periodo_alargado'][1]}\n\n"
-
-            if temporal.get('seculos_mencionados'):
-                texto_resultado += f"🏛️ Séculos mencionados: {', '.join(temporal['seculos_mencionados'])}\n\n"
-
-            # Mostrar alguns anos encontrados como exemplo
-            if temporal['anos_encontrados']:
-                anos_exemplo = temporal['anos_encontrados'][:10]
-                texto_resultado += f"📋 Exemplos de anos identificados: {', '.join(map(str, anos_exemplo))}"
-                if len(temporal['anos_encontrados']) > 10:
-                    texto_resultado += f" (e mais {len(temporal['anos_encontrados']) - 10} anos)"
-                texto_resultado += "\n\n"
+                texto_resultado += f"- Período total: {temporal['periodo_alargado'][0]} - {temporal['periodo_alargado'][1]}\n\n"
         elif 'analise_temporal' in resultado and 'erro' in resultado['analise_temporal']:
              texto_resultado += "╔═══════════════════════════════════════════════════════════════╗\n"
              texto_resultado += "║                    ANÁLISE DO PERÍODO TEMPORAL                ║\n"
@@ -1731,7 +2217,43 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
              texto_resultado += "╚═══════════════════════════════════════════════════════════════╝\n\n"
              texto_resultado += "ℹ️ Nenhum período temporal identificado.\n\n"
 
-        # SEÇÃO 2: Análise de Macro-temas
+        # SEÇÃO 2: Análise de Capitanias
+        if 'analise_capitanias' in resultado and resultado['analise_capitanias']['top_captaincies']:
+            capitanias = resultado['analise_capitanias']
+            texto_resultado += "╔═══════════════════════════════════════════════════════════════╗\n"
+            texto_resultado += "║                  ANÁLISE DE CAPITANIAS PROVÁVEIS              ║\n"
+            texto_resultado += "╚═══════════════════════════════════════════════════════════════╝\n\n"
+            texto_resultado += "🗺️ Capitanias mais prováveis mencionadas no texto:\n"
+            for i, (cap, score) in enumerate(capitanias['top_captaincies']):
+                emoji = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else "📍"
+                texto_resultado += f"  {emoji} {cap} (Pontuação: {score})\n"
+            
+            if capitanias['found_places_details']:
+                texto_resultado += "\n📍 Locais encontrados e suas capitanias:\n"
+                # Limitar a exibição de locais no resultado de texto para não sobrecarregar
+                place_counts_for_display = defaultdict(int)
+                place_captaincy_map_for_display = {}
+                for detail in capitanias['found_places_details']:
+                    place_counts_for_display[detail['place']] += 1
+                    place_captaincy_map_for_display[detail['place']] = detail['captaincy']
+                
+                sorted_display_places = sorted(place_counts_for_display.items(), key=lambda item: item[1], reverse=True)[:5] # Top 5 por ocorrência
+
+                for place, count in sorted_display_places:
+                    captaincy = place_captaincy_map_for_display[place]
+                    texto_resultado += f"  - {place} ({captaincy}): {count} ocorrência(s)\n"
+                if len(capitanias['found_places_details']) > 5:
+                    texto_resultado += f"  (e mais {len(capitanias['found_places_details']) - 5} locais)\n"
+
+            texto_resultado += "\n"
+        else:
+            texto_resultado += "╔═══════════════════════════════════════════════════════════════╗\n"
+            texto_resultado += "║                  ANÁLISE DE CAPITANIAS PROVÁVEIS              ║\n"
+            texto_resultado += "╚═══════════════════════════════════════════════════════════════╝\n\n"
+            texto_resultado += "ℹ️ Nenhuma capitania provável identificada ou dados de locais não carregados.\n\n"
+
+
+        # SEÇÃO 3: Análise de Macro-temas
         if resultado['tema_resultados'] and sum(resultado['tema_resultados'].values()) > 0:
             texto_resultado += "╔═══════════════════════════════════════════════════════════════╗\n"
             texto_resultado += "║                    ANÁLISE DE MACRO-TEMAS                    ║\n"
@@ -1754,7 +2276,7 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
             texto_resultado += "╚═══════════════════════════════════════════════════════════════╝\n\n"
             texto_resultado += "ℹ️ Nenhuma ocorrência de macro-temas encontrada ou configurada.\n\n"
 
-        # SEÇÃO 3: Rede de Palavras
+        # SEÇÃO 4: Rede de Palavras
         texto_resultado += "╔═══════════════════════════════════════════════════════════════╗\n"
         texto_resultado += "║                    REDE DE PALAVRAS                          ║\n"
         texto_resultado += "╚═══════════════════════════════════════════════════════════════╝\n\n"
@@ -1776,24 +2298,7 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
             texto_resultado += f"{emoji} {no} (Importância: {pagerank:.4f})\n"
 
         texto_resultado += "\n"
-
-        # SEÇÃO 4: Informações de Exportação
-        texto_resultado += "╔═══════════════════════════════════════════════════════════════╗\n"
-        texto_resultado += "║                    OPÇÕES DE EXPORTAÇÃO                      ║\n"
-        texto_resultado += "╚═══════════════════════════════════════════════════════════════╝\n\n"
-
-        texto_resultado += f"🖼️ Imagem do grafo temporariamente salva em:\n   {self.imagem_atual_path}\n\n"
-        texto_resultado += "💡 Utilize os botões abaixo para:\n"
-        texto_resultado += "   • 'Abrir Imagem' - visualizar o gráfico em tamanho completo\n"
-        texto_resultado += "   • 'Exportar Imagem' - salvar a imagem em local personalizado\n"
-        texto_resultado += "   • 'Gerar Relatório PDF' - criar um relatório completo em PDF\n\n"
-
-        # Adicionar informação sobre filtros aplicados
-        if hasattr(self, 'filtro_checkbox') and self.filtro_checkbox.isChecked():
-            palavra_filtro = self.filtro_input.text().strip()
-            if palavra_filtro:
-                texto_resultado += f"🔍 Filtro de Palavra Aplicado: '{palavra_filtro}'\n\n"
-
+        
         texto_resultado += "✅ Análise concluída com sucesso! Resultados prontos para visualização."
 
         self.result_text.setText(texto_resultado)
@@ -1805,7 +2310,7 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
             self.result_text.append(f"\n\n❌ Erro ao exibir a imagem no visualizador: {str(e)}\n")
             self.result_text.append("Por favor, use o botão 'Abrir Imagem' para visualizar externamente.")
 
-    # FUNÇÃO ATUALIZADA: Mostrar resultado dos temas com análise temporal
+    # FUNÇÃO ATUALIZADA: Mostrar resultado dos temas com análise temporal e capitanias
     def mostrar_resultado_temas(self, resultado):
         self.resultado_atual = resultado  # IMPORTANTE: salvar resultado para PDF
         self.progress_bar.setVisible(False)
@@ -1829,9 +2334,6 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
 
             if temporal['periodo_alargado']:
                 texto_resultado += f"📅 Período total: {temporal['periodo_alargado'][0]} - {temporal['periodo_alargado'][1]}\n\n"
-
-            if temporal.get('seculos_mencionados'):
-                texto_resultado += f"🏛️ Séculos mencionados: {', '.join(temporal['seculos_mencionados'])}\n\n"
         elif 'analise_temporal' in resultado and 'erro' in resultado['analise_temporal']:
              texto_resultado += "╔═══════════════════════════════════════════════════════════════╗\n"
              texto_resultado += "║                    ANÁLISE DO PERÍODO TEMPORAL                ║\n"
@@ -1843,7 +2345,43 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
              texto_resultado += "╚═══════════════════════════════════════════════════════════════╝\n\n"
              texto_resultado += "ℹ️ Nenhum período temporal identificado.\n\n"
 
-        # SEÇÃO 2: Análise de Macro-temas
+        # SEÇÃO 2: Análise de Capitanias
+        if 'analise_capitanias' in resultado and resultado['analise_capitanias']['top_captaincies']:
+            capitanias = resultado['analise_capitanias']
+            texto_resultado += "╔═══════════════════════════════════════════════════════════════╗\n"
+            texto_resultado += "║                  ANÁLISE DE CAPITANIAS PROVÁVEIS              ║\n"
+            texto_resultado += "╚═══════════════════════════════════════════════════════════════╝\n\n"
+            texto_resultado += "🗺️ Capitanias mais prováveis mencionadas no texto:\n"
+            for i, (cap, score) in enumerate(capitanias['top_captaincies']):
+                emoji = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else "📍"
+                texto_resultado += f"  {emoji} {cap} (Pontuação: {score})\n"
+            
+            if capitanias['found_places_details']:
+                texto_resultado += "\n📍 Locais encontrados e suas capitanias:\n"
+                # Limitar a exibição de locais no resultado de texto para não sobrecarregar
+                place_counts_for_display = defaultdict(int)
+                place_captaincy_map_for_display = {}
+                for detail in capitanias['found_places_details']:
+                    place_counts_for_display[detail['place']] += 1
+                    place_captaincy_map_for_display[detail['place']] = detail['captaincy']
+                
+                sorted_display_places = sorted(place_counts_for_display.items(), key=lambda item: item[1], reverse=True)[:5] # Top 5 por ocorrência
+
+                for place, count in sorted_display_places:
+                    captaincy = place_captaincy_map_for_display[place]
+                    texto_resultado += f"  - {place} ({captaincy}): {count} ocorrência(s)\n"
+                if len(capitanias['found_places_details']) > 5:
+                    texto_resultado += f"  (e mais {len(capitanias['found_places_details']) - 5} locais)\n"
+
+            texto_resultado += "\n"
+        else:
+            texto_resultado += "╔═══════════════════════════════════════════════════════════════╗\n"
+            texto_resultado += "║                  ANÁLISE DE CAPITANIAS PROVÁVEIS              ║\n"
+            texto_resultado += "╚═══════════════════════════════════════════════════════════════╝\n\n"
+            texto_resultado += "ℹ️ Nenhuma capitania provável identificada ou dados de locais não carregados.\n\n"
+
+
+        # SEÇÃO 3: Análise de Macro-temas
         tema_resultados = resultado['tema_resultados']
 
         if tema_resultados and sum(tema_resultados.values()) > 0:
@@ -1868,7 +2406,7 @@ As stopwords são palavras comuns que geralmente não contribuem para a análise
                 palavras = self.macro_temas.get(tema, [])
                 if palavras:
                     texto_resultado += "   Palavras-chave configuradas: " + ", ".join(palavras) + "\n\n"
-
+            
             # Adicionar estatísticas do texto
             texto_resultado += f"\nEstatísticas do texto analisado:\n"
             texto_resultado += f"Tamanho: {len(self.texto_atual):,} caracteres\n"
@@ -1926,7 +2464,7 @@ if __name__ == "__main__":
     # Definir configurações do aplicativo para evitar detecção como malware
     app = QApplication(sys.argv)
     app.setApplicationName("Oxossi Text Analyzer")
-    app.setApplicationVersion("1.0.2") # Atualizada para incluir melhorias visuais e de UX
+    app.setApplicationVersion("1.0.4") # Atualizada para incluir edição de locais
     app.setOrganizationName("HistoriaBR")
     app.setOrganizationDomain("historiabr.edu")
 
