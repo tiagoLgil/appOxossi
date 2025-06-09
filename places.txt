@@ -1,0 +1,218 @@
+Alhandra;Paraíba
+Almeirim;Pará
+Rio de Contas;Bahia
+Porto Calvo;Pernambuco
+Bragança;Pará
+Camamú;Bahia
+Chaves;Pará
+Bahia;Bahia
+Cidade da Paraíba;Paraíba
+Belém;Pará
+Oeiras;Piauí
+São Paulo;São Paulo
+São Sebastião do Rio de Janeiro;Rio de Janeiro
+Rio de Janeiro;Rio de Janeiro
+Natal;Rio Grande
+Cintra;Pará
+Conde;Paraíba
+Faro;Pará
+Fortaleza de Nossa Senhora da Assunção;Ceará
+Goiana;Pernambuco
+Igarassu;Pernambuco
+Itapeva do Faxina;São Paulo
+Maraú;Bahia
+Mariana;Minas Gerais
+Melgaço;Pará
+Minas de Apiaí;São Paulo
+Monte Alegre;Pará
+Monte-Mor;Paraíba
+Monte-mor o Novo da América;Ceará
+Jaguaripe;Bahia
+Magé;Rio de Janeiro
+Santo Amaro;Bahia
+Itapicuru de Cima;Bahia
+Nossa Senhora do Bom Sucesso do Pombal;Paraíba
+Parnaguá;Piauí
+Cairú;Bahia
+Cachoeira;Bahia
+Lajes;São Paulo
+Óbidos;Pará
+Olinda;Pernambuco
+Penedo do Rio São Francisco;Pernambuco
+Pilar de Taipú;Paraíba
+Portel;Pará
+Porto de Mós;Pará
+Rio Grande de São Pedro;Rio Grande de São Pedro
+Santa Helena;Rio de Janeiro
+Santa Maria Madalena da Alagoa do Sul;Pernambuco
+Santo Amaro das Brotas;Sergipe
+Boipeba;Bahia
+Itabaiana;Sergipe
+Santo Antonio de Sá;Rio de Janeiro
+Maragogipe;Bahia
+São Cristóvão;Sergipe
+São Francisco da Barra de Sergipe do Conde;Bahia
+São João da Barra de Paraíba;Espírito Santo
+São João da Parnaíba;Piauí
+São Matheus;Espírito Santo
+São Pedro del Rei;Mato Grosso
+Soure;Pará
+Taquara;Paraíba
+Vila Bela;Mato Grosso
+Alcobaça;Bahia
+Alenquer;Pará
+Aquiraz;Ceará
+Barbacena;Minas Gerais
+Barcelos;Rio Negro
+Belmonte;Bahia
+Vila de Borba a nova;Rio Negro
+Cachoeira da Abadia;Bahia
+Campanha da Princesa;Minas Gerais
+Campo Maior;Pernambuco
+Casal Vasco;Mato Grosso
+Caxias;Maranhão
+Aldeias Altas;Maranhão
+Vila de Cunha;São Paulo
+Ega;Rio Negro
+Guarapari;Espírito Santo
+Gurupá;Pará
+Icó;Ceará
+Jerumenha;Piauí
+Lorena;São Paulo
+Marvão;Piauí
+Mazagão;Cabo Norte
+Mogi-Mirim;São Paulo
+Monção;Maranhão
+Moura;Rio Negro
+Araçuí;Minas Gerais
+Minas Novas;Minas Gerais
+Nova Almeida;Espírito Santo
+Nova Bragança;São Paulo
+Ourém;Pará
+Paço do Lumiar;Maranhão
+Paracatu do Príncipe;Minas Gerais
+Paraitinga;São Paulo
+Pastos Bons;Maranhão
+Pitangui;Minas Gerais
+Portalegre;Rio Grande
+Porto Feliz;São Paulo
+Prado;Bahia
+Queluz;Minas Gerais
+Recife;Pernambuco
+Aracati;Ceará
+Jacobina;Bahia
+Santo Antônio do Rio das Caravelas;Bahia
+Santo Antônio dos Anjos da Laguna;Rio de Janeiro
+São Bento do Tamanduá;Minas Gerais
+São Carlos;São Paulo
+São Francisco das Chagas da Barra do Rio Grande;Bahia
+São João Del-Rei;Minas Gerais
+Atibaia;São Paulo
+São José de Guimarães;Maranhão
+São José del-Rei;Minas Gerais
+São José de Porto Alegre;Bahia
+Javari;Rio Negro
+São José do Paraíba;São Paulo
+São José do Rio Grande;Rio Grande
+São Mateus;Bahia
+São Salvador dos Campos;Espírito Santo
+Serpa;Rio Negro
+Silves;Rio Negro
+Tomar;Rio Negro
+Trancoso;Bahia
+Urubú;Bahia
+Viana;Maranhão
+Viçosa;Bahia
+Viçosa de Tutóia;Maranhão
+Vinhais;Maranhão
+Distinta e Real de Sobral;Ceará
+Espírito Santo de Nova Abrantes;Bahia
+Flor;Rio Grande
+Sirinhaém;Pernambuco
+Maria do Paraguai;Mato Grosso
+Cerveira;Maranhão
+Vila Nova da Princesa;Rio Grande
+Nova da Rainha;Paraíba
+Caeté;Minas Gerais
+Nova de Arez;Rio Grande
+Benevente;Espírito Santo
+Vila de Castro;São Paulo
+Estremoz do Norte;Rio Grande
+Rio de Contas;Bahia
+Nova de Santo Antônio do Rio de São Francisco;Sergipe
+Vila Nova de Sousa;Paraíba
+Vila Nova de Tomar;Sergipe
+Vila Nova do Campo Maior de Quixeramobim;Ceará
+Vila Nova do Príncipe;Rio Grande
+Granja;Ceará
+Arroches;Ceará
+Messejana;Ceará
+Crato;Ceará
+Sabará;Minas Gerais
+Cuiabá;Mato Grosso
+Vila Rica;Minas Gerais
+Macapá;Cabo Norte
+Vila Velha;Espírito Santo
+Vila Verde;Bahia
+Vila Viçosa;Ceará
+Vila Vistosa;Cabo Norte
+Itamaracá;Pernambuco
+Guaratinguetá;São Paulo
+São José do Poxim;Pernambuco
+Atalaia;Pernambuco
+São João da Anadia;Pernambuco
+Vila Nova da Rainha;Bahia
+Alter do Chão;Pará
+Beja;Pará
+Boim;Pará
+Colares;Pará
+Monfort;Pará
+Monsarás;Pará
+Oeiras - Pará;Pará
+Pinhel;Pará
+Salvaterra;Pará
+Souzel;Pará
+Veiros;Pará
+Antonina;São Paulo
+Guaratuba;São Paulo
+Itapetininga;São Paulo
+Sabaúna;São Paulo
+Itanhaém;São Paulo
+São Vicente;São Paulo
+Rio de São Francisco;São Paulo
+Parnaíba;São Paulo
+Pindamonhangaba;São Paulo
+Desterro;Santa Catarina
+Porto Seguro;Bahia
+Vila Boa;Goiás
+Itu;São Paulo
+Jacareí;São Paulo
+Jundiaí;São Paulo
+Mogi das Cruzes;São Paulo
+Sorocaba;São Paulo
+Vila de Santos;São Paulo
+São Jorge;Bahia
+São Sebastião;São Paulo
+Taubaté;São Paulo
+Ubatuba;São Paulo
+Vila Viçosa;Pará
+Angra dos Santos Reis;Rio de Janeiro
+Iguape;São Paulo
+Cananéia;São Paulo
+Caraguatatuba;São Paulo
+Paraty;Rio de Janeiro
+Paranaguá;São Paulo
+Curitiba;São Paulo
+Lagarto;Sergipe
+São João da Água Fria;Bahia
+Nova Mirandela;Bahia
+Real Vila de Assunção;Pernambuco
+Cimbres;Pernambuco
+Camaquã;Rio Grande de São Pedro
+Viamão;Rio Grande de São Pedro
+Vacaria;Rio Grande de São Pedro
+Rio Pardo;Rio Grande de São Pedro
+Jacuí;Rio Grande de São Pedro
+Vacacai;Rio Grande de São Pedro
+Meia Ponte;Goiás
+Santa Luzia;Goiás
